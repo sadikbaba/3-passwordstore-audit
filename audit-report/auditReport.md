@@ -1,91 +1,106 @@
-# Anyone can set  and update contract password. #
-
-## Impact 
- these can lead to, if there is a fund that only owner can control now the fast finger can control the all contract as he can set password and update it.
-
- ## Root Cause.
-Missing `onlyOwner` check when calling the function.
-
-```javascript 
-    function setPassword(string memory newPassword) external {
-        s_password = newPassword;
-        emit SetNewPassword();
-    }
-
- ```
 
 
+# Finding 1: Anyone Can Set and Update the Contract Password
 
- ## Proof of concept
+## Impact
 
-``` javascript
-     function testAnyOneCanSetPassword(address randomAddress) public {
-        vm.assume(randomAddress != owner);
-        vm.prank(randomAddress);
-        string memory randomPassword = "myPassWord";
-        passwordStore.setPassword(randomPassword);
-        vm.prank(owner);
+Any address can set or update the contract password.  
+If the password is used to gate owner-only functionality or control funds, an attacker can take full control of the contract by simply setting or updating the password before the legitimate owner does.
 
-       string memory actualPassword = passwordStore.getPassword();
-       assertEq(actualPassword, randomPassword);
-    } 
-``` 
+## Root Cause
+
+The `setPassword` function is missing an `onlyOwner` (or equivalent) access control check.
+
+```solidity
+function setPassword(string memory newPassword) external {
+    s_password = newPassword;
+    emit SetNewPassword();
+}
+
+
+## Proof of Concept
+
+A non-owner address is able to set the password, and the owner later observes that the password has been overwritten.
+
+```solidity
+function testAnyOneCanSetPassword(address randomAddress) public {
+    vm.assume(randomAddress != owner);
+
+    vm.prank(randomAddress);
+    string memory randomPassword = "myPassWord";
+    passwordStore.setPassword(randomPassword);
+
+    vm.prank(owner);
+    string memory actualPassword = passwordStore.getPassword();
+    assertEq(actualPassword, randomPassword);
+}
+```
 
 ## Recommended Mitigation
 
-* By adding require before calling the remaining function this will prevent non_owner from calling the function. require: `require(msg.sender == s_owner); _;`
-#
+Restrict access to the `setPassword` function by enforcing an owner check.
 
-full function after adding require 
+### Updated Function (With Access Control)
 
-```javascript
-    function setPassword(string memory newPassword) external {
-       require(msg.sender == s_owner); // this is were to add the require
-        s_password = newPassword;
-        emit SetNewPassword();
-    }
+```solidity
+function setPassword(string memory newPassword) external {
+    require(msg.sender == s_owner, "Not owner");
+    s_password = newPassword;
+    emit SetNewPassword();
+}
 ```
-#
 
 
-# Another finding
 
-# summary. 
-## Any on can read your password offline.
+# Finding 2: Anyone Can Read the Password from On-Chain Storage
+
+## Summary
+
+Any user can read the stored password directly from contract storage, even if the variable is marked as `private`.
 
 ## Impact
-* storing private data in blockchain is not recommended .
-* even if make variable private its only private to another contract not human.
 
-## Root cause
-* Making storing password as variable ` string private s_password;` is the the root cause.
+* Storing sensitive data (such as passwords) on-chain is insecure.
+* The `private` keyword only restricts access from other contracts, not from users or off-chain tools.
+* Anyone can extract the password by reading the contract’s storage slots.
 
-## Proof of concept
+## Root Cause
 
-* any one can call this to see the password. and will print out the slot where the password is stored.
+The password is stored directly on-chain as a state variable:
 
-```
-sadikbaba@fedora 3-passwordstore-audit $ cast storage 0x5FbDB2315678afecb367f032d93F
-642f64180aa3 1  --rpc-url http://127.0.0.1:8545 
+```solidity
+string private s_password;
 ```
 
-* password slot storage `0x6d7950617373776f726400000000000000000000000000000000000000000014` then call this and convert it to origin
+## Proof of Concept
 
+Anyone can inspect the contract’s storage using standard tooling and recover the password.
+
+### Step 1: Read the Storage Slot
+
+```bash
+cast storage 0x5FbDB2315678afecb367f032d93F642f64180aa3 1 \
+  --rpc-url http://127.0.0.1:8545
 ```
-cast parse-bytes32-string 0x6d7950617373776f726400000000000000000000000000000000000000000014
+
+This returns the raw storage value:
+
+```text
+0x6d7950617373776f726400000000000000000000000000000000000000000014
 ```
-* password will print out.
 
-#
+### Step 2: Decode the Stored Value
 
-## Recommended Mitigation:
+```bash
+cast parse-bytes32-string \
+0x6d7950617373776f726400000000000000000000000000000000000000000014
+```
 
- * this contract need two encryption, first owner encrypt his password off chain then store it onchain this will make owner to remember his password that stored off chain to decrypt the password onchain.
+The password is revealed in plaintext.
 
+## Recommended Mitigation
 
-
-
-
-
-
-
+* Do not store plaintext secrets on-chain.
+* Encrypt the password off-chain before storing it on-chain, or store a cryptographic hash instead.
+* Use hashes or signatures for verification rather than plaintext comparison.
+```
