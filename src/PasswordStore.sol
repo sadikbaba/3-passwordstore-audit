@@ -26,6 +26,7 @@ contract PasswordStore {
 
     //@audit missing access control
     function setPassword(string memory newPassword) external {
+       require(msg.sender == s_owner);
         s_password = newPassword;
         emit SetNewPassword();
     }
